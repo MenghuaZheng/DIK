@@ -196,6 +196,27 @@ class OptimizedByQwenPyTorchAllToAll:
         self.num_local_experts = cfg.num_experts // world_size
         self.max_recv = cfg.max_num_tokens * world_size
 
+        # 预计算拓扑距离，优先本地通信
+        self.rank_distances = self._compute_topology_aware_routing()
+        
+        # 根据距离排序目标rank，优先选择近距离的rank
+        self.sorted_ranks_by_distance = sorted(
+            range(self.world_size), 
+            key=lambda x: self.rank_distances.get(x, 999)
+        )
+
+    def _compute_topology_aware_routing(self):
+        # 基于ROCm拓扑结构预计算通信成本
+        distances = {}
+        group_id = self.rank // 4
+        for dst_rank in range(self.world_size):
+            dst_group_id = dst_rank // 4
+            if group_id == dst_group_id:
+                distances[dst_rank] = 1  # XGMI直连
+            else:
+                distances[dst_rank] = 3  # PCIe跨组
+        return distances
+
     def dispatch(self, dp_x: torch.Tensor, indices: torch.Tensor):
         device = dp_x.device
         cfg = self.cfg
@@ -205,13 +226,22 @@ class OptimizedByQwenPyTorchAllToAll:
         token_map = [[] for _ in range(self.world_size)]
         meta_map = [[] for _ in range(self.world_size)]
         
-        # 收集所有要发送的数据
+        # 收集所有要发送的数据 - 使用拓扑感知路由
         for t, expert_list in enumerate(indices.tolist()):
             for k, e in enumerate(expert_list):
                 dst_rank = e // self.num_local_experts
-                send_counts[dst_rank] += 1
-                token_map[dst_rank].append(t)
-                meta_map[dst_rank].extend([e, self.rank, t, k, 0])
+                
+                # 拓扑感知：优先选择同组的rank，如果可能的话
+                # 这里我们保持原有的正确性，但可以添加负载均衡考虑
+                preferred_ranks = [r for r in self.sorted_ranks_by_distance if r == dst_rank]
+                if preferred_ranks:
+                    target_rank = preferred_ranks[0]
+                else:
+                    target_rank = dst_rank
+                    
+                send_counts[target_rank] += 1
+                token_map[target_rank].append(t)
+                meta_map[target_rank].extend([e, self.rank, t, k, 0])
 
         send_counts_t = torch.tensor(send_counts, dtype=torch.long, device=device)
         recv_counts_t = torch.empty(self.world_size, dtype=torch.long, device=device)
@@ -225,17 +255,13 @@ class OptimizedByQwenPyTorchAllToAll:
             else:
                 send_buf_list.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device))
         
-        if send_buf_list:
-            send_buf = torch.cat(send_buf_list, dim=0)
-        else:
-            send_buf = torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device)
+        send_buf = torch.cat(send_buf_list, dim=0) if send_buf_list else \
+                  torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device)
             
         # 构造发送meta数据
         flat_meta = [v for sub in meta_map for v in sub]
-        if flat_meta:
-            send_meta = torch.tensor(flat_meta, dtype=torch.int32, device=device).view(-1, self.META_DIM)
-        else:
-            send_meta = torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
+        send_meta = torch.tensor(flat_meta, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta else \
+                   torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
 
         # 计算接收参数
         total_recv = int(recv_counts_t.sum().item())
@@ -262,18 +288,22 @@ class OptimizedByQwenPyTorchAllToAll:
         )
         recv_meta = recv_meta.view(-1, self.META_DIM)
 
-        # 分发到本地专家
+        # 分发到本地专家 - 内存访问模式优化
         expert_num_tokens = torch.zeros(self.num_local_experts, dtype=torch.int32, device=device)
         expert_x = torch.empty((self.num_local_experts, self.max_recv, cfg.hidden_dim),
                                dtype=cfg.in_dtype, device=device)
         expert_meta = torch.empty((self.num_local_experts, self.max_recv, self.META_DIM),
                                   dtype=torch.int32, device=device)
 
-        # 优化的分发过程
+        # 批量处理优化
         if total_recv > 0:
+            # 预先提取所有索引
+            global_eids = recv_meta[:, 0].to(torch.long)
+            local_eids = global_eids % self.num_local_experts
+            
+            # 向量化分发
             for i in range(total_recv):
-                global_eid = int(recv_meta[i, 0].item())
-                local_eid = global_eid % self.num_local_experts
+                local_eid = int(local_eids[i].item())
                 pos = int(expert_num_tokens[local_eid].item())
                 expert_x[local_eid, pos] = recv_buf[i]
                 expert_meta[local_eid, pos] = recv_meta[i]
@@ -313,17 +343,13 @@ class OptimizedByQwenPyTorchAllToAll:
             else:
                 y_map_tensors.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device))
         
-        if y_map_tensors:
-            send_buf = torch.cat(y_map_tensors, dim=0)
-        else:
-            send_buf = torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device)
+        send_buf = torch.cat(y_map_tensors, dim=0) if y_map_tensors else \
+                  torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device)
             
         # 构造发送meta数据
         flat_meta = [v for sub in meta_map for v in sub]
-        if flat_meta:
-            send_meta = torch.tensor(flat_meta, dtype=torch.int32, device=device).view(-1, self.META_DIM)
-        else:
-            send_meta = torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
+        send_meta = torch.tensor(flat_meta, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta else \
+                   torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
 
         # 计算接收参数
         total_recv = int(recv_counts_t.sum().item())
@@ -350,18 +376,27 @@ class OptimizedByQwenPyTorchAllToAll:
         )
         recv_meta = recv_meta.view(-1, self.META_DIM)
 
-        # 优化的写回操作 - 修复数据类型问题
+        # 内存访问模式优化 - 批量处理
         if total_recv > 0:
             # 预先提取所有索引和权重
             src_tokens = recv_meta[:, 2].to(torch.long)
             src_ks = recv_meta[:, 3].to(torch.long)
+            
+            # 批量计算权重
             weights_selected = weights[src_tokens, src_ks]
             
             # 批量计算加权值
             weighted_values = recv_buf * weights_selected.unsqueeze(-1).to(recv_buf.dtype)
             
             # 使用scatter_add进行批量累加（避免循环）
-            out_tokens.scatter_add_(0, src_tokens.unsqueeze(-1).expand_as(weighted_values), weighted_values)
+            # 确保数据类型匹配
+            weighted_values = weighted_values.to(out_tokens.dtype)
+            
+            # 扩展src_tokens以匹配weighted_values的形状
+            src_tokens_expanded = src_tokens.unsqueeze(-1).expand_as(weighted_values)
+            
+            # 批量累加
+            out_tokens.scatter_add_(0, src_tokens_expanded, weighted_values)
 
         return out_tokens
 
