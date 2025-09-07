@@ -1,0 +1,5 @@
+seed: 6635; hidden_dim: 6144; world_size: 8; num_experts: 8; max_num_tokens: 16; experts_per_token: 2
+seed: 1234; hidden_dim: 2048; world_size: 8; num_experts: 64; max_num_tokens: 32; experts_per_token: 6
+seed: 51; hidden_dim: 2880; world_size: 8; num_experts: 128; max_num_tokens: 128; experts_per_token: 4
+seed: 175; hidden_dim: 4096; world_size: 8; num_experts: 128; max_num_tokens: 256; experts_per_token: 8
+seed: 4; hidden_dim: 7168; world_size: 8; num_experts: 256; max_num_tokens: 256; experts_per_token: 8

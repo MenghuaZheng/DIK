@@ -1,0 +1,154 @@
+If nccl is available:  True
+c01n01:7261:7261 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7261:7261 [0] NCCL INFO Bootstrap : Using lo:127.0.0.1<0>
+c01n01:7261:7261 [0] NCCL INFO NET/Plugin : Plugin load (librccl-net.so) returned 2 : librccl-net.so: cannot open shared object file: No such file or directory
+c01n01:7261:7261 [0] NCCL INFO NET/Plugin : No plugin found, using internal implementation
+c01n01:7261:7261 [0] NCCL INFO Kernel version: 5.15.0-153-generic
+c01n01:7261:7261 [0] NCCL INFO ROCr version 1.1
+c01n01:7261:7261 [0] NCCL INFO Dmabuf feature disabled without NCCL_ENABLE_DMABUF_SUPPORT=1
+RCCL version 2.18.3+hip6.0 HEAD:2f6d59e+
+[3] data = 4.0
+c01n01:7264:7264 [3] NCCL INFO ROCr version 1.1
+c01n01:7264:7264 [3] NCCL INFO Dmabuf feature disabled without NCCL_ENABLE_DMABUF_SUPPORT=1
+c01n01:7264:7264 [3] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7264:7264 [3] NCCL INFO Bootstrap : Using lo:127.0.0.1<0>
+c01n01:7264:7264 [3] NCCL INFO NET/Plugin : Plugin load (librccl-net.so) returned 2 : librccl-net.so: cannot open shared object file: No such file or directory
+c01n01:7264:7264 [3] NCCL INFO NET/Plugin : No plugin found, using internal implementation
+c01n01:7264:7264 [3] NCCL INFO Kernel version: 5.15.0-153-generic
+c01n01:7264:7544 [3] NCCL INFO Setting hipLimitStackSize to 512 maxLocalSizeBytes 0
+c01n01:7264:7544 [3] NCCL INFO NCCL_IB_DISABLE set by environment to 1.
+c01n01:7264:7544 [3] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7264:7544 [3] NCCL INFO NET/Socket : Using [0]lo:127.0.0.1<0>
+c01n01:7264:7544 [3] NCCL INFO Using network Socket
+c01n01:7264:7544 [3] NCCL INFO comm 0x24f93a60 rank 3 nranks 4 cudaDev 3 busId 3000 commId 0xaf83194d75ea64d2 - Init START
+c01n01:7264:7544 [3] NCCL INFO rocm_smi_lib: version 6.0.0.0
+c01n01:7264:7544 [3] NCCL INFO NCCL_P2P_LEVEL set by environment to LOC
+c01n01:7264:7544 [3] NCCL INFO Setting affinity for GPU 0 to ffffffff,00000000,ffffffff
+c01n01:7264:7544 [3] NCCL INFO Trees [0] -1/-1/-1->3->2 [1] -1/-1/-1->3->2 [2] -1/-1/-1->3->2 [3] -1/-1/-1->3->2 comm 0x24f93a60 nRanks 04 busId 3000
+c01n01:7264:7544 [3] NCCL INFO P2P Chunksize set to 131072
+c01n01:7264:7544 [3] NCCL INFO Channel 00 : 3[3000] -> 0[63000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Channel 01 : 3[3000] -> 0[63000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Channel 02 : 3[3000] -> 0[63000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Channel 03 : 3[3000] -> 0[63000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Connected all rings comm 0x24f93a60 nRanks 04 busId 3000
+c01n01:7264:7544 [3] NCCL INFO Channel 00 : 3[3000] -> 2[25000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Channel 01 : 3[3000] -> 2[25000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Channel 02 : 3[3000] -> 2[25000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Channel 03 : 3[3000] -> 2[25000] via SHM/direct/direct comm 0x24f93a60 nRanks 04
+c01n01:7264:7544 [3] NCCL INFO Connected all trees
+c01n01:7264:7544 [3] NCCL INFO threadThresholds 8/8/64 | 32/8/64 | 256 | 256
+c01n01:7264:7544 [3] NCCL INFO 4 coll channels, 0 nvls channels, 4 p2p channels, 2 p2p channels per peer
+c01n01:7264:7544 [3] NCCL INFO MSCCL: No external scheduler found, using internal implementation
+c01n01:7264:7544 [3] NCCL INFO Using MSCCL files from /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/../share/rccl/msccl-algorithms
+c01n01:7264:7544 [3] NCCL INFO MSCCL: Initialization finished, localSize 400
+c01n01:7264:7544 [3] NCCL INFO comm 0x24f93a60 rank 3 nranks 4 cudaDev 3 busId 3000 commId 0xaf83194d75ea64d2 localSize 0 used 8410032 bytes - Init COMPLETE
+c01n01:7264:7550 [3] NCCL INFO [Service thread] Connection closed by localRank 3
+c01n01:7264:7566 [0] NCCL INFO MSCCL: Teardown finished
+c01n01:7264:7566 [0] NCCL INFO comm 0x24f93a60 rank 3 nranks 4 cudaDev 3 busId 3000 - Abort COMPLETE
+[0] data = 4.0
+c01n01:7261:7543 [0] NCCL INFO Setting hipLimitStackSize to 512 maxLocalSizeBytes 0
+c01n01:7261:7543 [0] NCCL INFO NCCL_IB_DISABLE set by environment to 1.
+c01n01:7261:7543 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7261:7543 [0] NCCL INFO NET/Socket : Using [0]lo:127.0.0.1<0>
+c01n01:7261:7543 [0] NCCL INFO Using network Socket
+c01n01:7261:7543 [0] NCCL INFO comm 0x3be76b90 rank 0 nranks 4 cudaDev 0 busId 63000 commId 0xaf83194d75ea64d2 - Init START
+c01n01:7261:7543 [0] NCCL INFO rocm_smi_lib: version 6.0.0.0
+c01n01:7261:7543 [0] NCCL INFO NCCL_P2P_LEVEL set by environment to LOC
+c01n01:7261:7543 [0] NCCL INFO Setting affinity for GPU 3 to ffffffff,00000000,ffffffff
+c01n01:7261:7543 [0] NCCL INFO Channel 00/04 :    0   1   2   3
+c01n01:7261:7543 [0] NCCL INFO Channel 01/04 :    0   1   2   3
+c01n01:7261:7543 [0] NCCL INFO Channel 02/04 :    0   1   2   3
+c01n01:7261:7543 [0] NCCL INFO Channel 03/04 :    0   1   2   3
+c01n01:7261:7543 [0] NCCL INFO Trees [0] 1/-1/-1->0->-1 [1] 1/-1/-1->0->-1 [2] 1/-1/-1->0->-1 [3] 1/-1/-1->0->-1 comm 0x3be76b90 nRanks 04 busId 63000
+c01n01:7261:7543 [0] NCCL INFO P2P Chunksize set to 131072
+c01n01:7261:7543 [0] NCCL INFO Channel 00 : 0[63000] -> 1[43000] via SHM/direct/direct comm 0x3be76b90 nRanks 04
+c01n01:7261:7543 [0] NCCL INFO Channel 01 : 0[63000] -> 1[43000] via SHM/direct/direct comm 0x3be76b90 nRanks 04
+c01n01:7261:7543 [0] NCCL INFO Channel 02 : 0[63000] -> 1[43000] via SHM/direct/direct comm 0x3be76b90 nRanks 04
+c01n01:7261:7543 [0] NCCL INFO Channel 03 : 0[63000] -> 1[43000] via SHM/direct/direct comm 0x3be76b90 nRanks 04
+c01n01:7261:7543 [0] NCCL INFO Connected all rings comm 0x3be76b90 nRanks 04 busId 63000
+c01n01:7261:7543 [0] NCCL INFO Connected all trees
+c01n01:7261:7543 [0] NCCL INFO threadThresholds 8/8/64 | 32/8/64 | 256 | 256
+c01n01:7261:7543 [0] NCCL INFO 4 coll channels, 0 nvls channels, 4 p2p channels, 2 p2p channels per peer
+c01n01:7261:7543 [0] NCCL INFO MSCCL: No external scheduler found, using internal implementation
+c01n01:7261:7543 [0] NCCL INFO Using MSCCL files from /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/../share/rccl/msccl-algorithms
+c01n01:7261:7543 [0] NCCL INFO MSCCL: Initialization finished, localSize 400
+c01n01:7261:7543 [0] NCCL INFO comm 0x3be76b90 rank 0 nranks 4 cudaDev 0 busId 63000 commId 0xaf83194d75ea64d2 localSize 0 used 8410032 bytes - Init COMPLETE
+c01n01:7261:7548 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+c01n01:7261:7565 [0] NCCL INFO MSCCL: Teardown finished
+c01n01:7261:7565 [0] NCCL INFO comm 0x3be76b90 rank 0 nranks 4 cudaDev 0 busId 63000 - Abort COMPLETE
+[2] data = 4.0
+c01n01:7263:7263 [2] NCCL INFO ROCr version 1.1
+c01n01:7263:7263 [2] NCCL INFO Dmabuf feature disabled without NCCL_ENABLE_DMABUF_SUPPORT=1
+c01n01:7263:7263 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7263:7263 [2] NCCL INFO Bootstrap : Using lo:127.0.0.1<0>
+c01n01:7263:7263 [2] NCCL INFO NET/Plugin : Plugin load (librccl-net.so) returned 2 : librccl-net.so: cannot open shared object file: No such file or directory
+c01n01:7263:7263 [2] NCCL INFO NET/Plugin : No plugin found, using internal implementation
+c01n01:7263:7263 [2] NCCL INFO Kernel version: 5.15.0-153-generic
+c01n01:7263:7546 [2] NCCL INFO Setting hipLimitStackSize to 512 maxLocalSizeBytes 0
+c01n01:7263:7546 [2] NCCL INFO NCCL_IB_DISABLE set by environment to 1.
+c01n01:7263:7546 [2] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7263:7546 [2] NCCL INFO NET/Socket : Using [0]lo:127.0.0.1<0>
+c01n01:7263:7546 [2] NCCL INFO Using network Socket
+c01n01:7263:7546 [2] NCCL INFO comm 0x4176c160 rank 2 nranks 4 cudaDev 2 busId 25000 commId 0xaf83194d75ea64d2 - Init START
+c01n01:7263:7546 [2] NCCL INFO rocm_smi_lib: version 6.0.0.0
+c01n01:7263:7546 [2] NCCL INFO NCCL_P2P_LEVEL set by environment to LOC
+c01n01:7263:7546 [2] NCCL INFO Setting affinity for GPU 1 to ffffffff,00000000,ffffffff
+c01n01:7263:7546 [2] NCCL INFO Trees [0] 3/-1/-1->2->1 [1] 3/-1/-1->2->1 [2] 3/-1/-1->2->1 [3] 3/-1/-1->2->1 comm 0x4176c160 nRanks 04 busId 25000
+c01n01:7263:7546 [2] NCCL INFO P2P Chunksize set to 131072
+c01n01:7263:7546 [2] NCCL INFO Channel 00 : 2[25000] -> 3[3000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Channel 01 : 2[25000] -> 3[3000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Channel 02 : 2[25000] -> 3[3000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Channel 03 : 2[25000] -> 3[3000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Connected all rings comm 0x4176c160 nRanks 04 busId 25000
+c01n01:7263:7546 [2] NCCL INFO Channel 00 : 2[25000] -> 1[43000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Channel 01 : 2[25000] -> 1[43000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Channel 02 : 2[25000] -> 1[43000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Channel 03 : 2[25000] -> 1[43000] via SHM/direct/direct comm 0x4176c160 nRanks 04
+c01n01:7263:7546 [2] NCCL INFO Connected all trees
+c01n01:7263:7546 [2] NCCL INFO threadThresholds 8/8/64 | 32/8/64 | 256 | 256
+c01n01:7263:7546 [2] NCCL INFO 4 coll channels, 0 nvls channels, 4 p2p channels, 2 p2p channels per peer
+c01n01:7263:7546 [2] NCCL INFO MSCCL: No external scheduler found, using internal implementation
+c01n01:7263:7546 [2] NCCL INFO Using MSCCL files from /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/../share/rccl/msccl-algorithms
+c01n01:7263:7546 [2] NCCL INFO MSCCL: Initialization finished, localSize 400
+c01n01:7263:7546 [2] NCCL INFO comm 0x4176c160 rank 2 nranks 4 cudaDev 2 busId 25000 commId 0xaf83194d75ea64d2 localSize 0 used 8410032 bytes - Init COMPLETE
+c01n01:7263:7547 [2] NCCL INFO [Service thread] Connection closed by localRank 2
+c01n01:7263:7564 [0] NCCL INFO MSCCL: Teardown finished
+c01n01:7263:7564 [0] NCCL INFO comm 0x4176c160 rank 2 nranks 4 cudaDev 2 busId 25000 - Abort COMPLETE
+[1] data = 4.0
+c01n01:7262:7262 [1] NCCL INFO ROCr version 1.1
+c01n01:7262:7262 [1] NCCL INFO Dmabuf feature disabled without NCCL_ENABLE_DMABUF_SUPPORT=1
+c01n01:7262:7262 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7262:7262 [1] NCCL INFO Bootstrap : Using lo:127.0.0.1<0>
+c01n01:7262:7262 [1] NCCL INFO NET/Plugin : Plugin load (librccl-net.so) returned 2 : librccl-net.so: cannot open shared object file: No such file or directory
+c01n01:7262:7262 [1] NCCL INFO NET/Plugin : No plugin found, using internal implementation
+c01n01:7262:7262 [1] NCCL INFO Kernel version: 5.15.0-153-generic
+c01n01:7262:7545 [1] NCCL INFO Setting hipLimitStackSize to 512 maxLocalSizeBytes 0
+c01n01:7262:7545 [1] NCCL INFO NCCL_IB_DISABLE set by environment to 1.
+c01n01:7262:7545 [1] NCCL INFO NCCL_SOCKET_IFNAME set by environment to lo
+c01n01:7262:7545 [1] NCCL INFO NET/Socket : Using [0]lo:127.0.0.1<0>
+c01n01:7262:7545 [1] NCCL INFO Using network Socket
+c01n01:7262:7545 [1] NCCL INFO comm 0xca7ecc0 rank 1 nranks 4 cudaDev 1 busId 43000 commId 0xaf83194d75ea64d2 - Init START
+c01n01:7262:7545 [1] NCCL INFO rocm_smi_lib: version 6.0.0.0
+c01n01:7262:7545 [1] NCCL INFO NCCL_P2P_LEVEL set by environment to LOC
+c01n01:7262:7545 [1] NCCL INFO Setting affinity for GPU 2 to ffffffff,00000000,ffffffff
+c01n01:7262:7545 [1] NCCL INFO Trees [0] 2/-1/-1->1->0 [1] 2/-1/-1->1->0 [2] 2/-1/-1->1->0 [3] 2/-1/-1->1->0 comm 0xca7ecc0 nRanks 04 busId 43000
+c01n01:7262:7545 [1] NCCL INFO P2P Chunksize set to 131072
+c01n01:7262:7545 [1] NCCL INFO Channel 00 : 1[43000] -> 2[25000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Channel 01 : 1[43000] -> 2[25000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Channel 02 : 1[43000] -> 2[25000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Channel 03 : 1[43000] -> 2[25000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Connected all rings comm 0xca7ecc0 nRanks 04 busId 43000
+c01n01:7262:7545 [1] NCCL INFO Channel 00 : 1[43000] -> 0[63000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Channel 01 : 1[43000] -> 0[63000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Channel 02 : 1[43000] -> 0[63000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Channel 03 : 1[43000] -> 0[63000] via SHM/direct/direct comm 0xca7ecc0 nRanks 04
+c01n01:7262:7545 [1] NCCL INFO Connected all trees
+c01n01:7262:7545 [1] NCCL INFO threadThresholds 8/8/64 | 32/8/64 | 256 | 256
+c01n01:7262:7545 [1] NCCL INFO 4 coll channels, 0 nvls channels, 4 p2p channels, 2 p2p channels per peer
+c01n01:7262:7545 [1] NCCL INFO MSCCL: No external scheduler found, using internal implementation
+c01n01:7262:7545 [1] NCCL INFO Using MSCCL files from /opt/conda/envs/py_3.10/lib/python3.10/site-packages/torch/lib/../share/rccl/msccl-algorithms
+c01n01:7262:7545 [1] NCCL INFO MSCCL: Initialization finished, localSize 400
+c01n01:7262:7545 [1] NCCL INFO comm 0xca7ecc0 rank 1 nranks 4 cudaDev 1 busId 43000 commId 0xaf83194d75ea64d2 localSize 0 used 8410032 bytes - Init COMPLETE
+c01n01:7262:7549 [1] NCCL INFO [Service thread] Connection closed by localRank 1
+c01n01:7262:7563 [0] NCCL INFO MSCCL: Teardown finished
+c01n01:7262:7563 [0] NCCL INFO comm 0xca7ecc0 rank 1 nranks 4 cudaDev 1 busId 43000 - Abort COMPLETE
