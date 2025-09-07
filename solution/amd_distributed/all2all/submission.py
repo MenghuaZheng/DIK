@@ -186,7 +186,7 @@ class PyTorchAllToAll:
         return out_tokens
 
 # ---------------- Optimized All2All pytorch impl ----------------
-class OptimizedPyTorchAllToAll:
+class OptimizedByQwenPyTorchAllToAll:
     META_DIM = 5  # global_exp, src_rank, src_token, src_k, pad
 
     def __init__(self, cfg, rank: int, world_size: int):
@@ -352,22 +352,26 @@ class OptimizedPyTorchAllToAll:
 
         # 优化的写回操作 - 修复数据类型问题
         if total_recv > 0:
-            for i in range(total_recv):
-                src_token = int(recv_meta[i, 2].item())
-                src_k = int(recv_meta[i, 3].item())
-                w = weights[src_token, src_k]
-                # 确保数据类型匹配
-                weighted_value = recv_buf[i] * w.to(recv_buf.dtype)
-                out_tokens[src_token] += weighted_value.to(out_tokens.dtype)
+            # 预先提取所有索引和权重
+            src_tokens = recv_meta[:, 2].to(torch.long)
+            src_ks = recv_meta[:, 3].to(torch.long)
+            weights_selected = weights[src_tokens, src_ks]
+            
+            # 批量计算加权值
+            weighted_values = recv_buf * weights_selected.unsqueeze(-1).to(recv_buf.dtype)
+            
+            # 使用scatter_add进行批量累加（避免循环）
+            out_tokens.scatter_add_(0, src_tokens.unsqueeze(-1).expand_as(weighted_values), weighted_values)
 
         return out_tokens
-    
+
 def custom_kernel(data: input_t) -> output_t:
     cfg, rank_data, rank, world_size = data
     torch.cuda.set_device(rank)
 
     # ata = PyTorchAllToAll(cfg, rank, world_size)
-    ata = OptimizedPyTorchAllToAll(cfg, rank, world_size)
+    ata = OptimizedByQwenPyTorchAllToAll(cfg, rank, world_size)
+    # ata = OptimizedByDpskPyTorchAllToAll(cfg, rank, world_size)
 
     expert_num, expert_x, expert_meta = ata.dispatch(rank_data.x, rank_data.indices)
     expert_y = expert_x.to(cfg.out_dtype) * (1 + rank)
