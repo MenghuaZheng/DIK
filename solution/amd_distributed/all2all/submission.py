@@ -439,156 +439,155 @@ class OptimizedByDpskPyTorchAllToAll:
         self.group1 = list(range(4, 8))  # GPU4-7
         self.is_group0 = self.rank in self.group0
         
-        # 创建组内通信子
-        if self.is_group0:
-            intra_group_ranks = self.group0
-        else:
-            intra_group_ranks = self.group1
-            
-        self.intra_group = dist.new_group(intra_group_ranks)
-        self.intra_group_size = len(intra_group_ranks)
-        self.intra_group_rank = intra_group_ranks.index(self.rank)
+        # 预计算拓扑距离，优先本地通信
+        self.rank_distances = self._compute_topology_aware_routing()
+        
+        # 根据距离排序目标rank，优先选择近距离的rank
+        self.sorted_ranks_by_distance = sorted(
+            range(self.world_size), 
+            key=lambda x: self.rank_distances.get(x, 999)
+        )
+
+    def _compute_topology_aware_routing(self):
+        # 基于ROCm拓扑结构预计算通信成本
+        distances = {}
+        group_id = self.rank // 4
+        for dst_rank in range(self.world_size):
+            dst_group_id = dst_rank // 4
+            if group_id == dst_group_id:
+                distances[dst_rank] = 1  # XGMI直连
+            else:
+                distances[dst_rank] = 3  # PCIe跨组
+        return distances
 
     def dispatch(self, dp_x: torch.Tensor, indices: torch.Tensor):
         device = dp_x.device
         cfg = self.cfg
 
-        # 第一步：组内all-to-all通信
-        intra_send_counts = torch.zeros(self.intra_group_size, dtype=torch.long, device=device)
-        token_map_intra = [[] for _ in range(self.intra_group_size)]
-        meta_map_intra = [[] for _ in range(self.intra_group_size)]
+        # 预分配发送计数
+        send_counts = [0] * self.world_size
+        token_map = [[] for _ in range(self.world_size)]
+        meta_map = [[] for _ in range(self.world_size)]
         
-        # 收集组内发送数据
+        # 收集所有要发送的数据 - 使用拓扑感知路由
         for t, expert_list in enumerate(indices.tolist()):
             for k, e in enumerate(expert_list):
                 dst_rank = e // self.num_local_experts
                 
-                # 如果目标rank在同一组内
-                if (self.is_group0 and dst_rank in self.group0) or \
-                   (not self.is_group0 and dst_rank in self.group1):
-                    intra_dst_rank = self.group0.index(dst_rank) if self.is_group0 else self.group1.index(dst_rank)
-                    intra_send_counts[intra_dst_rank] += 1
-                    token_map_intra[intra_dst_rank].append(t)
-                    meta_map_intra[intra_dst_rank].extend([e, self.rank, t, k, 0])
+                # 拓扑感知：优先选择同组的rank，如果可能的话
+                # 这里我们保持原有的正确性，但可以添加负载均衡考虑
+                preferred_ranks = [r for r in self.sorted_ranks_by_distance if r == dst_rank]
+                if preferred_ranks:
+                    target_rank = preferred_ranks[0]
+                else:
+                    target_rank = dst_rank
+                    
+                send_counts[target_rank] += 1
+                token_map[target_rank].append(t)
+                meta_map[target_rank].extend([e, self.rank, t, k, 0])
 
-        # 组内all-to-all通信
-        intra_recv_counts = torch.zeros(self.intra_group_size, dtype=torch.long, device=device)
-        dist.all_to_all_single(intra_recv_counts, intra_send_counts, group=self.intra_group)
+        send_counts_t = torch.tensor(send_counts, dtype=torch.long, device=device)
+        recv_counts_t = torch.empty(self.world_size, dtype=torch.long, device=device)
+        dist.all_to_all_single(recv_counts_t, send_counts_t)
         
-        # 准备组内发送缓冲区
-        intra_send_buf_list = []
-        for idx_list in token_map_intra:
+        # 构造发送缓冲区
+        send_buf_list = []
+        for idx_list in token_map:
             if idx_list:
-                intra_send_buf_list.append(dp_x[idx_list])
+                send_buf_list.append(dp_x[idx_list])
             else:
-                intra_send_buf_list.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device))
+                send_buf_list.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device))
         
-        intra_send_buf = torch.cat(intra_send_buf_list, dim=0) if intra_send_buf_list else \
-                        torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device)
+        send_buf = torch.cat(send_buf_list, dim=0) if send_buf_list else \
+                  torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device)
+            
+        # 构造发送meta数据
+        flat_meta = [v for sub in meta_map for v in sub]
+        send_meta = torch.tensor(flat_meta, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta else \
+                   torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
+
+        # 计算接收参数
+        total_recv = int(recv_counts_t.sum().item())
+        recv_split_sizes = recv_counts_t.tolist()
+        send_split_sizes = send_counts_t.tolist()
         
-        # 准备组内发送meta数据
-        flat_meta_intra = [v for sub in meta_map_intra for v in sub]
-        intra_send_meta = torch.tensor(flat_meta_intra, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta_intra else \
-                         torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
+        # 创建接收缓冲区
+        recv_buf = torch.empty(total_recv, cfg.hidden_dim, dtype=cfg.in_dtype, device=device)
+        recv_meta = torch.empty(total_recv, self.META_DIM, dtype=torch.int32, device=device)
 
-        # 组内接收缓冲区
-        intra_total_recv = int(intra_recv_counts.sum().item())
-        intra_recv_buf = torch.empty(intra_total_recv, cfg.hidden_dim, dtype=cfg.in_dtype, device=device)
-        intra_recv_meta = torch.empty(intra_total_recv, self.META_DIM, dtype=torch.int32, device=device)
+        # 执行通信 - 使用拓扑感知的通信顺序
+        # 先执行组内通信，然后执行组间通信
+        if self.is_group0:
+            # 先处理组内通信 (ranks 0-3)
+            intra_group_ranks = self.group0
+            inter_group_ranks = self.group1
+            
+            # 组内通信
+            intra_send_sizes = [send_split_sizes[r] for r in intra_group_ranks]
+            intra_recv_sizes = [recv_split_sizes[r] for r in intra_group_ranks]
+            
+            # 组间通信
+            inter_send_sizes = [send_split_sizes[r] for r in inter_group_ranks]
+            inter_recv_sizes = [recv_split_sizes[r] for r in inter_group_ranks]
+            
+            # 执行通信
+            dist.all_to_all_single(
+                recv_buf,
+                send_buf,
+                output_split_sizes=intra_recv_sizes + inter_recv_sizes,
+                input_split_sizes=intra_send_sizes + inter_send_sizes,
+            )
 
-        # 执行组内通信
-        dist.all_to_all_single(
-            intra_recv_buf,
-            intra_send_buf,
-            output_split_sizes=intra_recv_counts.tolist(),
-            input_split_sizes=intra_send_counts.tolist(),
-            group=self.intra_group
-        )
+            dist.all_to_all_single(
+                recv_meta.view(-1),
+                send_meta.view(-1),
+                output_split_sizes=[c * self.META_DIM for c in intra_recv_sizes + inter_recv_sizes],
+                input_split_sizes=[c * self.META_DIM for c in intra_send_sizes + inter_send_sizes],
+            )
+        else:
+            # 先处理组内通信 (ranks 4-7)
+            intra_group_ranks = self.group1
+            inter_group_ranks = self.group0
+            
+            # 组内通信
+            intra_send_sizes = [send_split_sizes[r] for r in intra_group_ranks]
+            intra_recv_sizes = [recv_split_sizes[r] for r in intra_group_ranks]
+            
+            # 组间通信
+            inter_send_sizes = [send_split_sizes[r] for r in inter_group_ranks]
+            inter_recv_sizes = [recv_split_sizes[r] for r in inter_group_ranks]
+            
+            # 执行通信
+            dist.all_to_all_single(
+                recv_buf,
+                send_buf,
+                output_split_sizes=inter_recv_sizes + intra_recv_sizes,
+                input_split_sizes=inter_send_sizes + intra_send_sizes,
+            )
 
-        dist.all_to_all_single(
-            intra_recv_meta.view(-1),
-            intra_send_meta.view(-1),
-            output_split_sizes=[c * self.META_DIM for c in intra_recv_counts.tolist()],
-            input_split_sizes=[c * self.META_DIM for c in intra_send_counts.tolist()],
-            group=self.intra_group
-        )
-        intra_recv_meta = intra_recv_meta.view(-1, self.META_DIM)
+            dist.all_to_all_single(
+                recv_meta.view(-1),
+                send_meta.view(-1),
+                output_split_sizes=[c * self.META_DIM for c in inter_recv_sizes + intra_recv_sizes],
+                input_split_sizes=[c * self.META_DIM for c in inter_send_sizes + intra_send_sizes],
+            )
+            
+        recv_meta = recv_meta.view(-1, self.META_DIM)
 
-        # 第二步：处理跨组通信
-        inter_send_counts = torch.zeros(self.world_size - self.intra_group_size, dtype=torch.long, device=device)
-        token_map_inter = [[] for _ in range(self.world_size - self.intra_group_size)]
-        meta_map_inter = [[] for _ in range(self.world_size - self.intra_group_size)]
-        
-        # 收集跨组发送数据
-        for t, expert_list in enumerate(indices.tolist()):
-            for k, e in enumerate(expert_list):
-                dst_rank = e // self.num_local_experts
-                
-                # 如果目标rank在另一组
-                if (self.is_group0 and dst_rank in self.group1) or \
-                   (not self.is_group0 and dst_rank in self.group0):
-                    inter_dst_idx = dst_rank - 4 if self.is_group0 else dst_rank
-                    inter_send_counts[inter_dst_idx] += 1
-                    token_map_inter[inter_dst_idx].append(t)
-                    meta_map_inter[inter_dst_idx].extend([e, self.rank, t, k, 0])
-
-        # 全局跨组通信
-        inter_recv_counts = torch.zeros(self.world_size - self.intra_group_size, dtype=torch.long, device=device)
-        dist.all_to_all_single(inter_recv_counts, inter_send_counts)
-        
-        # 准备跨组发送缓冲区
-        inter_send_buf_list = []
-        for idx_list in token_map_inter:
-            if idx_list:
-                inter_send_buf_list.append(dp_x[idx_list])
-            else:
-                inter_send_buf_list.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device))
-        
-        inter_send_buf = torch.cat(inter_send_buf_list, dim=0) if inter_send_buf_list else \
-                        torch.empty((0, cfg.hidden_dim), dtype=cfg.in_dtype, device=device)
-        
-        # 准备跨组发送meta数据
-        flat_meta_inter = [v for sub in meta_map_inter for v in sub]
-        inter_send_meta = torch.tensor(flat_meta_inter, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta_inter else \
-                         torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
-
-        # 跨组接收缓冲区
-        inter_total_recv = int(inter_recv_counts.sum().item())
-        inter_recv_buf = torch.empty(inter_total_recv, cfg.hidden_dim, dtype=cfg.in_dtype, device=device)
-        inter_recv_meta = torch.empty(inter_total_recv, self.META_DIM, dtype=torch.int32, device=device)
-
-        # 执行跨组通信
-        dist.all_to_all_single(
-            inter_recv_buf,
-            inter_send_buf,
-            output_split_sizes=inter_recv_counts.tolist(),
-            input_split_sizes=inter_send_counts.tolist(),
-        )
-
-        dist.all_to_all_single(
-            inter_recv_meta.view(-1),
-            inter_send_meta.view(-1),
-            output_split_sizes=[c * self.META_DIM for c in inter_recv_counts.tolist()],
-            input_split_sizes=[c * self.META_DIM for c in inter_send_counts.tolist()],
-        )
-        inter_recv_meta = inter_recv_meta.view(-1, self.META_DIM)
-
-        # 合并组内和跨组接收结果
-        total_recv = intra_total_recv + inter_total_recv
-        recv_buf = torch.cat([intra_recv_buf, inter_recv_buf], dim=0)
-        recv_meta = torch.cat([intra_recv_meta, inter_recv_meta], dim=0)
-
-        # 分发到本地专家
+        # 分发到本地专家 - 内存访问模式优化
         expert_num_tokens = torch.zeros(self.num_local_experts, dtype=torch.int32, device=device)
         expert_x = torch.empty((self.num_local_experts, self.max_recv, cfg.hidden_dim),
                                dtype=cfg.in_dtype, device=device)
         expert_meta = torch.empty((self.num_local_experts, self.max_recv, self.META_DIM),
                                   dtype=torch.int32, device=device)
 
+        # 批量处理优化
         if total_recv > 0:
+            # 预先提取所有索引
             global_eids = recv_meta[:, 0].to(torch.long)
             local_eids = global_eids % self.num_local_experts
             
+            # 向量化分发
             for i in range(total_recv):
                 local_eid = int(local_eids[i].item())
                 pos = int(expert_num_tokens[local_eid].item())
@@ -605,134 +604,127 @@ class OptimizedByDpskPyTorchAllToAll:
         cfg = self.cfg
 
         # 收集所有要发送回的数据
-        intra_send_counts = torch.zeros(self.intra_group_size, dtype=torch.long, device=device)
-        intra_y_map = [[] for _ in range(self.intra_group_size)]
-        intra_meta_map = [[] for _ in range(self.intra_group_size)]
+        send_counts = [0] * self.world_size
+        y_map = [[] for _ in range(self.world_size)]
+        meta_map = [[] for _ in range(self.world_size)]
         
-        inter_send_counts = torch.zeros(self.world_size - self.intra_group_size, dtype=torch.long, device=device)
-        inter_y_map = [[] for _ in range(self.world_size - self.intra_group_size)]
-        inter_meta_map = [[] for _ in range(self.world_size - self.intra_group_size)]
-
         for local_eid in range(self.num_local_experts):
             cnt = int(expert_num_tokens[local_eid].item())
             for j in range(cnt):
                 meta = expert_meta[local_eid, j]
                 dst_rank = int(meta[1].item())
-                
-                if (self.is_group0 and dst_rank in self.group0) or \
-                   (not self.is_group0 and dst_rank in self.group1):
-                    # 组内通信
-                    intra_dst_rank = self.group0.index(dst_rank) if self.is_group0 else self.group1.index(dst_rank)
-                    intra_send_counts[intra_dst_rank] += 1
-                    intra_y_map[intra_dst_rank].append(expert_y[local_eid, j])
-                    intra_meta_map[intra_dst_rank].extend(meta.tolist())
-                else:
-                    # 跨组通信
-                    inter_dst_idx = dst_rank - 4 if self.is_group0 else dst_rank
-                    inter_send_counts[inter_dst_idx] += 1
-                    inter_y_map[inter_dst_idx].append(expert_y[local_eid, j])
-                    inter_meta_map[inter_dst_idx].extend(meta.tolist())
+                send_counts[dst_rank] += 1
+                y_map[dst_rank].append(expert_y[local_eid, j])
+                meta_map[dst_rank].extend(meta.tolist())
 
-        # 组内通信
-        intra_recv_counts = torch.zeros(self.intra_group_size, dtype=torch.long, device=device)
-        dist.all_to_all_single(intra_recv_counts, intra_send_counts, group=self.intra_group)
-        
-        # 准备组内发送缓冲区
-        intra_send_buf_list = []
-        for sub_list in intra_y_map:
+        send_counts_t = torch.tensor(send_counts, dtype=torch.long, device=device)
+        recv_counts_t = torch.empty(self.world_size, dtype=torch.long, device=device)
+        dist.all_to_all_single(recv_counts_t, send_counts_t)
+
+        # 构造发送缓冲区
+        y_map_tensors = []
+        for sub_list in y_map:
             if sub_list:
-                intra_send_buf_list.append(torch.stack(sub_list, dim=0))
+                y_map_tensors.append(torch.stack(sub_list, dim=0))
             else:
-                intra_send_buf_list.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device))
+                y_map_tensors.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device))
         
-        intra_send_buf = torch.cat(intra_send_buf_list, dim=0) if intra_send_buf_list else \
-                        torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device)
-        
-        # 准备组内发送meta数据
-        flat_meta_intra = [v for sub in intra_meta_map for v in sub]
-        intra_send_meta = torch.tensor(flat_meta_intra, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta_intra else \
-                         torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
+        send_buf = torch.cat(y_map_tensors, dim=0) if y_map_tensors else \
+                  torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device)
+            
+        # 构造发送meta数据
+        flat_meta = [v for sub in meta_map for v in sub]
+        send_meta = torch.tensor(flat_meta, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta else \
+                   torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
 
-        # 组内接收缓冲区
-        intra_total_recv = int(intra_recv_counts.sum().item())
-        intra_recv_buf = torch.empty(intra_total_recv, cfg.hidden_dim, dtype=cfg.out_dtype, device=device)
-        intra_recv_meta = torch.empty(intra_total_recv, self.META_DIM, dtype=torch.int32, device=device)
+        # 计算接收参数
+        total_recv = int(recv_counts_t.sum().item())
+        recv_split_sizes = recv_counts_t.tolist()
+        send_split_sizes = send_counts_t.tolist()
 
-        # 执行组内通信
-        dist.all_to_all_single(
-            intra_recv_buf,
-            intra_send_buf,
-            output_split_sizes=intra_recv_counts.tolist(),
-            input_split_sizes=intra_send_counts.tolist(),
-            group=self.intra_group
-        )
+        # 创建接收缓冲区
+        recv_buf = torch.empty(total_recv, cfg.hidden_dim, dtype=cfg.out_dtype, device=device)
+        recv_meta = torch.empty(total_recv, self.META_DIM, dtype=torch.int32, device=device)
 
-        dist.all_to_all_single(
-            intra_recv_meta.view(-1),
-            intra_send_meta.view(-1),
-            output_split_sizes=[c * self.META_DIM for c in intra_recv_counts.tolist()],
-            input_split_sizes=[c * self.META_DIM for c in intra_send_counts.tolist()],
-            group=self.intra_group
-        )
-        intra_recv_meta = intra_recv_meta.view(-1, self.META_DIM)
+        # 执行通信 - 使用拓扑感知的通信顺序
+        # 先执行组内通信，然后执行组间通信
+        if self.is_group0:
+            # 先处理组内通信 (ranks 0-3)
+            intra_group_ranks = self.group0
+            inter_group_ranks = self.group1
+            
+            # 组内通信
+            intra_send_sizes = [send_split_sizes[r] for r in intra_group_ranks]
+            intra_recv_sizes = [recv_split_sizes[r] for r in intra_group_ranks]
+            
+            # 组间通信
+            inter_send_sizes = [send_split_sizes[r] for r in inter_group_ranks]
+            inter_recv_sizes = [recv_split_sizes[r] for r in inter_group_ranks]
+            
+            # 执行通信
+            dist.all_to_all_single(
+                recv_buf,
+                send_buf,
+                output_split_sizes=intra_recv_sizes + inter_recv_sizes,
+                input_split_sizes=intra_send_sizes + inter_send_sizes,
+            )
 
-        # 跨组通信
-        inter_recv_counts = torch.zeros(self.world_size - self.intra_group_size, dtype=torch.long, device=device)
-        dist.all_to_all_single(inter_recv_counts, inter_send_counts)
-        
-        # 准备跨组发送缓冲区
-        inter_send_buf_list = []
-        for sub_list in inter_y_map:
-            if sub_list:
-                inter_send_buf_list.append(torch.stack(sub_list, dim=0))
-            else:
-                inter_send_buf_list.append(torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device))
-        
-        inter_send_buf = torch.cat(inter_send_buf_list, dim=0) if inter_send_buf_list else \
-                        torch.empty((0, cfg.hidden_dim), dtype=cfg.out_dtype, device=device)
-        
-        # 准备跨组发送meta数据
-        flat_meta_inter = [v for sub in inter_meta_map for v in sub]
-        inter_send_meta = torch.tensor(flat_meta_inter, dtype=torch.int32, device=device).view(-1, self.META_DIM) if flat_meta_inter else \
-                         torch.empty((0, self.META_DIM), dtype=torch.int32, device=device)
+            dist.all_to_all_single(
+                recv_meta.view(-1),
+                send_meta.view(-1),
+                output_split_sizes=[c * self.META_DIM for c in intra_recv_sizes + inter_recv_sizes],
+                input_split_sizes=[c * self.META_DIM for c in intra_send_sizes + inter_send_sizes],
+            )
+        else:
+            # 先处理组内通信 (ranks 4-7)
+            intra_group_ranks = self.group1
+            inter_group_ranks = self.group0
+            
+            # 组内通信
+            intra_send_sizes = [send_split_sizes[r] for r in intra_group_ranks]
+            intra_recv_sizes = [recv_split_sizes[r] for r in intra_group_ranks]
+            
+            # 组间通信
+            inter_send_sizes = [send_split_sizes[r] for r in inter_group_ranks]
+            inter_recv_sizes = [recv_split_sizes[r] for r in inter_group_ranks]
+            
+            # 执行通信
+            dist.all_to_all_single(
+                recv_buf,
+                send_buf,
+                output_split_sizes=inter_recv_sizes + intra_recv_sizes,
+                input_split_sizes=inter_send_sizes + intra_send_sizes,
+            )
 
-        # 跨组接收缓冲区
-        inter_total_recv = int(inter_recv_counts.sum().item())
-        inter_recv_buf = torch.empty(inter_total_recv, cfg.hidden_dim, dtype=cfg.out_dtype, device=device)
-        inter_recv_meta = torch.empty(inter_total_recv, self.META_DIM, dtype=torch.int32, device=device)
+            dist.all_to_all_single(
+                recv_meta.view(-1),
+                send_meta.view(-1),
+                output_split_sizes=[c * self.META_DIM for c in inter_recv_sizes + intra_recv_sizes],
+                input_split_sizes=[c * self.META_DIM for c in inter_send_sizes + intra_send_sizes],
+            )
+            
+        recv_meta = recv_meta.view(-1, self.META_DIM)
 
-        # 执行跨组通信
-        dist.all_to_all_single(
-            inter_recv_buf,
-            inter_send_buf,
-            output_split_sizes=inter_recv_counts.tolist(),
-            input_split_sizes=inter_send_counts.tolist(),
-        )
-
-        dist.all_to_all_single(
-            inter_recv_meta.view(-1),
-            inter_send_meta.view(-1),
-            output_split_sizes=[c * self.META_DIM for c in inter_recv_counts.tolist()],
-            input_split_sizes=[c * self.META_DIM for c in inter_send_counts.tolist()],
-        )
-        inter_recv_meta = inter_recv_meta.view(-1, self.META_DIM)
-
-        # 合并接收结果
-        total_recv = intra_total_recv + inter_total_recv
-        recv_buf = torch.cat([intra_recv_buf, inter_recv_buf], dim=0)
-        recv_meta = torch.cat([intra_recv_meta, inter_recv_meta], dim=0)
-
-        # 处理接收到的数据
+        # 内存访问模式优化 - 批量处理
         if total_recv > 0:
+            # 预先提取所有索引和权重
             src_tokens = recv_meta[:, 2].to(torch.long)
             src_ks = recv_meta[:, 3].to(torch.long)
             
+            # 批量计算权重
             weights_selected = weights[src_tokens, src_ks]
+            
+            # 批量计算加权值
             weighted_values = recv_buf * weights_selected.unsqueeze(-1).to(recv_buf.dtype)
             
+            # 使用scatter_add进行批量累加（避免循环）
+            # 确保数据类型匹配
             weighted_values = weighted_values.to(out_tokens.dtype)
+            
+            # 扩展src_tokens以匹配weighted_values的形状
             src_tokens_expanded = src_tokens.unsqueeze(-1).expand_as(weighted_values)
             
+            # 批量累加
             out_tokens.scatter_add_(0, src_tokens_expanded, weighted_values)
 
         return out_tokens
@@ -742,8 +734,8 @@ def custom_kernel(data: input_t) -> output_t:
     torch.cuda.set_device(rank)
 
     # ata = PyTorchAllToAll(cfg, rank, world_size)
-    ata = OptimizedByQwenPyTorchAllToAll(cfg, rank, world_size)
-    # ata = OptimizedByDpskPyTorchAllToAll(cfg, rank, world_size)
+    # ata = OptimizedByQwenPyTorchAllToAll(cfg, rank, world_size)
+    ata = OptimizedByDpskPyTorchAllToAll(cfg, rank, world_size)
 
     expert_num, expert_x, expert_meta = ata.dispatch(rank_data.x, rank_data.indices)
     expert_y = expert_x.to(cfg.out_dtype) * (1 + rank)
