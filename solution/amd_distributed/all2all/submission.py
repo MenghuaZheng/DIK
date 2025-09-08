@@ -187,21 +187,18 @@ class PyTorchAllToAll:
 
 def manual_all_to_all_single(recv_buf, send_buf, output_split_sizes, input_split_sizes, group=None):
     """
-    使用 send/recv 手动实现 all_to_all_single 的功能。
+    使用 send/recv 手动实现 all_to_all_single 的功能，并使用 batch_isend_irecv 优化。
     注意：此实现假设所有 rank 同时调用，并且 split_sizes 长度等于 world_size。
     """
+    # 如果指定了 group，这里为了简化没有处理，实际使用时需要注意 rank 转换
     if group is not None:
-        # 注意：send/recv 的 dst/src 是全局 rank。如果使用 group，需要转换。
-        # 为简化，这里假设 group 是默认组或处理了 rank 转换。
-        # 更严格的实现需要 dist.get_global_rank(group, group_rank)
-        raise NotImplementedError("This manual implementation does not handle custom groups directly.")
+        raise NotImplementedError("This manual implementation does not handle custom groups directly in the batched version.")
 
     world_size = dist.get_world_size()
     rank = dist.get_rank()
 
     if world_size == 1:
-        # 单进程情况，直接复制
-        if recv_buf is not send_buf: # 避免不必要的拷贝
+        if recv_buf is not send_buf:
             recv_buf.copy_(send_buf)
         return
 
@@ -211,13 +208,12 @@ def manual_all_to_all_single(recv_buf, send_buf, output_split_sizes, input_split
     for i, size in enumerate(input_split_sizes):
         end_idx = start_idx + size
         if size > 0:
-            send_slices.append((i, send_buf[start_idx:end_idx])) # (目标 rank, 数据)
+            send_slices.append((i, send_buf[start_idx:end_idx]))
         else:
-            # 发送空张量
-            send_slices.append((i, send_buf[0:0])) # 创建一个空张量，形状正确
+            send_slices.append((i, send_buf[0:0])) # 空张量
         start_idx = end_idx
 
-    # 2. 准备接收缓冲区的视图 (如果 recv_buf 不是空的)
+    # 2. 准备接收缓冲区的视图
     recv_views = []
     start_idx = 0
     for size in output_split_sizes:
@@ -228,40 +224,47 @@ def manual_all_to_all_single(recv_buf, send_buf, output_split_sizes, input_split
              recv_views.append(recv_buf[0:0]) # 空视图
         start_idx = end_idx
 
-    # 3. 执行点对点通信
-    requests = []
-    # 遵循避免死锁的顺序：先处理 rank < current_rank 的，再处理 rank > current_rank 的
-    # 处理 rank < current_rank: 先 recv 再 send
+    # 3. 构建 P2P 操作列表 (遵循避免死锁的顺序)
+    p2p_ops = []
+    
+    # --- 第一阶段：与 rank < current_rank 通信 ---
+    # 先准备接收操作
     for src_rank in range(rank):
-        if output_split_sizes[src_rank] > 0: # 只有当预期接收数据时才 recv
-            req_recv = dist.irecv(tensor=recv_views[src_rank], src=src_rank)
-            requests.append(req_recv)
-        if input_split_sizes[src_rank] > 0: # 只有当有数据要发送时才 send
-             # send_slices[src_rank][0] 是目标 rank，应该等于 src_rank
-            req_send = dist.isend(tensor=send_slices[src_rank][1], dst=src_rank)
-            requests.append(req_send)
+        if output_split_sizes[src_rank] > 0:
+            op = dist.P2POp(dist.irecv, recv_views[src_rank], src_rank)
+            p2p_ops.append(op)
+    # 再准备发送操作
+    for src_rank in range(rank):
+        if input_split_sizes[src_rank] > 0:
+            op = dist.P2POp(dist.isend, send_slices[src_rank][1], src_rank)
+            p2p_ops.append(op)
 
-    # 处理自己 (rank == current_rank): 可以直接复制或发送给自己
-    # 为了避免潜在问题，我们也可以用 send/recv，但通常直接复制更快
+    # --- 处理自己 (rank == current_rank) ---
+    # 直接复制，不涉及网络通信
     if input_split_sizes[rank] > 0 and output_split_sizes[rank] > 0:
-        # 确保是同一块内存区域的复制
-        if not recv_views[rank].data_ptr() == send_slices[rank][1].data_ptr():
-            recv_views[rank].copy_(send_slices[rank][1])
+        if not (recv_views[rank].data_ptr() == send_slices[rank][1].data_ptr() and recv_views[rank].shape == send_slices[rank][1].shape):
+             recv_views[rank].copy_(send_slices[rank][1])
 
-    # 处理 rank > current_rank: 先 send 再 recv
+    # --- 第二阶段：与 rank > current_rank 通信 ---
+    # 先准备发送操作
     for dst_rank in range(rank + 1, world_size):
-        if input_split_sizes[dst_rank] > 0: # 先 send
-            req_send = dist.isend(tensor=send_slices[dst_rank][1], dst=dst_rank)
-            requests.append(req_send)
-        if output_split_sizes[dst_rank] > 0: # 再 recv
-            req_recv = dist.irecv(tensor=recv_views[dst_rank], src=dst_rank)
-            requests.append(req_recv)
+        if input_split_sizes[dst_rank] > 0:
+            op = dist.P2POp(dist.isend, send_slices[dst_rank][1], dst_rank)
+            p2p_ops.append(op)
+    # 再准备接收操作
+    for dst_rank in range(rank + 1, world_size):
+        if output_split_sizes[dst_rank] > 0:
+            op = dist.P2POp(dist.irecv, recv_views[dst_rank], dst_rank)
+            p2p_ops.append(op)
 
-    # 4. 等待所有异步操作完成
-    for req in requests:
-        req.wait()
+    # 4. 批量执行所有 P2P 操作
+    if p2p_ops: # 只有当有待处理的操作时才调用
+        requests = dist.batch_isend_irecv(p2p_ops)
+        # 5. 等待所有异步操作完成
+        for req in requests:
+            req.wait()
 
-# ---------------- 使用手动 all_to_all 的 All2All 实现 ----------------
+# ---------------- 使用手动 batched all_to_all 的 All2All 实现 ----------------
 class OptimizedByQwenPyTorchAllToAll:
     META_DIM = 5
 
@@ -291,7 +294,7 @@ class OptimizedByQwenPyTorchAllToAll:
 
         send_counts_t = torch.tensor(send_counts, dtype=torch.long, device=device)
         recv_counts_t = torch.empty(self.world_size, dtype=torch.long, device=device)
-        # 使用手动实现的 all_to_all_single
+        # 使用手动实现的 all_to_all_single (现在是批处理版本)
         manual_all_to_all_single(recv_counts_t, send_counts_t, [1]*self.world_size, [1]*self.world_size)
 
         send_buf_list = []
@@ -314,7 +317,7 @@ class OptimizedByQwenPyTorchAllToAll:
         recv_buf = torch.empty(total_recv, cfg.hidden_dim, dtype=cfg.in_dtype, device=device)
         recv_meta = torch.empty(total_recv, self.META_DIM, dtype=torch.int32, device=device)
 
-        # --- 使用手动实现进行数据通信 ---
+        # --- 使用手动批处理实现进行数据通信 ---
         manual_all_to_all_single(
             recv_buf,
             send_buf,
@@ -393,7 +396,7 @@ class OptimizedByQwenPyTorchAllToAll:
         recv_buf = torch.empty(total_recv, cfg.hidden_dim, dtype=cfg.out_dtype, device=device)
         recv_meta = torch.empty(total_recv, self.META_DIM, dtype=torch.int32, device=device)
 
-        # --- 使用手动实现进行数据通信 ---
+        # --- 使用手动批处理实现进行数据通信 ---
         manual_all_to_all_single(
             recv_buf,
             send_buf,
